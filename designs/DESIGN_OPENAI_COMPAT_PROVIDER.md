@@ -128,7 +128,7 @@ pub enum OpenAiCompatError {
 
 | Method | Purpose |
 |---|---|
-| `new(provider_type, model, api_timeout_secs, OpenAiCompatSettings) -> Result<Self>` | Build the authenticated client with the configured timeout. |
+| `new(provider_type, model, api_timeout_secs, OpenAiCompatSettings) -> Result<Self>` | Build the authenticated client with the configured timeout; reject reserved request keys and `stream`. |
 | `post_request(&self, body: &Value) -> Result<OpenAiResponse, OpenAiCompatError>` | POST JSON `body` to `self.base_url`. Transport error → `TransientError(30s)` (error string sanitized via `redact_secret()`). On HTTP success, reads body as text and parses JSON; parse failure → `ApiError`. HTTP errors: 429 → `RateLimitExceeded` (`Retry-After` header parsed first; body regex `"Please retry in ([0-9.]+)s"` overrides if matched; default 60s), 401/403 → `AuthenticationError`, 500/502/503/504 → `TransientError(30s)`, other → `ApiError`. Includes logging of response tokens on success. |
 | `translate_ai_request(AiRequest, max_tokens, provider_type, send_reasoning_content) -> OpenAiRequest` | See translation mapping below |
 | `translate_ai_response(OpenAiResponse) -> AiResponse` | See translation mapping below |
@@ -242,6 +242,7 @@ fn get_capabilities(&self) -> ProviderCapabilities {
 |---|---|
 | `base_url`, `context_window_size` | Model-derived |
 | `max_tokens` | `4096` |
+| `request_extra` | Empty table; see [request-extra design](DESIGN_OPENAI_COMPAT_REQUEST_EXTRA.md) |
 | `send_reasoning_content` | `false`; enabled and disabled modes partition the response cache |
 
 Field in `AiSettings`:

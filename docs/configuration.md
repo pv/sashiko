@@ -150,6 +150,7 @@ Settings for the OpenAI providers (`provider = "openai"` or `provider = "openai-
 | `base_url` | string | model-derived | API endpoint URL. Derived from the model name, `https://api.openai.com/v1/chat/completions` for anything unrecognized. |
 | `context_window_size` | integer | model-derived | Context window size. `128000` for most models. |
 | `max_tokens` | integer | `4096` | Max output tokens per response. With `provider = "openai"` it is sent as `max_completion_tokens`, which bounds reasoning tokens as well as the reply. |
+| `request_extra` | table | `{}` | Extra request-body fields; see [reasoning controls](llm-providers.md#reasoning-controls). Rejects reserved core keys (`model`, `messages`, `tools`, `temperature`, `max_tokens`, `max_completion_tokens`, `response_format`) and `stream` (streaming unsupported) at construction. Values partition the response cache. |
 | `send_reasoning_content` | boolean | `false` | Echo received `reasoning_content` unchanged on assistant turns only if the endpoint accepts it. Defaults to false in both provider modes for backward compatibility; received reasoning is always preserved as `thought`. Enabled and disabled modes use separate response-cache partitions. |
 
 #### `[ai.kiro_cli]`

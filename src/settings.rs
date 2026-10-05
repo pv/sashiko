@@ -353,6 +353,8 @@ pub struct OpenAiCompatSettings {
     #[serde(default)]
     pub max_tokens: Option<u32>,
     #[serde(default)]
+    pub request_extra: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
     pub send_reasoning_content: bool,
 }
 
@@ -1158,9 +1160,49 @@ mod tests {
     }
 
     #[test]
-    fn test_reasoning_content_defaults_and_override() {
+    fn test_request_extra_deserializes_to_json() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("Settings.toml");
+        std::fs::write(
+            &path,
+            r#"
+base_url = "http://localhost:9931/v1"
+
+[request_extra]
+reasoning_effort = "high"
+seed = 42
+
+[request_extra.chat_template_kwargs]
+enable_thinking = true
+preserve_thinking = false
+"#,
+        )
+        .unwrap();
+
+        let compat: OpenAiCompatSettings = Config::builder()
+            .add_source(File::from(path.as_ref()))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(compat.request_extra["reasoning_effort"], "high");
+        assert_eq!(compat.request_extra["seed"], 42);
+        assert_eq!(
+            compat.request_extra["chat_template_kwargs"]["enable_thinking"],
+            true
+        );
+        assert_eq!(
+            compat.request_extra["chat_template_kwargs"]["preserve_thinking"],
+            false
+        );
+    }
+
+    #[test]
+    fn test_openai_compat_defaults_and_override() {
         let compat: OpenAiCompatSettings =
             toml::from_str("base_url = 'http://localhost/v1'").unwrap();
+        assert!(compat.request_extra.is_empty());
         assert!(!compat.send_reasoning_content);
 
         for enabled in [false, true] {

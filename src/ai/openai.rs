@@ -24,6 +24,7 @@ use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -41,6 +42,33 @@ pub struct OpenAiRequest {
     pub max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<Value>,
+    #[serde(flatten)]
+    pub request_extra: BTreeMap<String, Value>,
+}
+
+const RESERVED_EXTRA_FIELDS: [&str; 8] = [
+    "model",
+    "messages",
+    "tools",
+    "temperature",
+    "max_tokens",
+    "max_completion_tokens",
+    "response_format",
+    "stream",
+];
+
+fn reject_reserved_extra_fields(extra: &BTreeMap<String, Value>) -> Result<()> {
+    let conflicts: Vec<&str> = RESERVED_EXTRA_FIELDS
+        .into_iter()
+        .filter(|field| extra.contains_key(*field))
+        .collect();
+    if !conflicts.is_empty() {
+        anyhow::bail!(
+            "ai.openai_compat.request_extra contains reserved fields: {}",
+            conflicts.join(", ")
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -212,6 +240,8 @@ pub struct OpenAiCompatClient {
     provider_type: OpenAiProviderType,
     client: Client,
     temperature_unsupported: AtomicBool,
+    request_extra: BTreeMap<String, Value>,
+    request_extra_identity: Option<String>,
     send_reasoning_content: bool,
 }
 
@@ -222,6 +252,7 @@ impl OpenAiCompatClient {
         api_timeout_secs: u64,
         settings: OpenAiCompatSettings,
     ) -> Result<Self> {
+        reject_reserved_extra_fields(&settings.request_extra)?;
         let base_url = settings
             .base_url
             .unwrap_or_else(|| Self::default_base_url_for_model(&model));
@@ -230,6 +261,12 @@ impl OpenAiCompatClient {
             .unwrap_or_else(|| Self::default_context_window_for_model(&model));
         let max_tokens = settings.max_tokens.unwrap_or(4096);
         let send_reasoning_content = settings.send_reasoning_content;
+        let request_extra = settings.request_extra;
+        let request_extra_identity = if request_extra.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&request_extra)?)
+        };
 
         let api_key = std::env::var("OPENAI_API_KEY")
             .or_else(|_| std::env::var("LLM_API_KEY"))
@@ -259,6 +296,8 @@ impl OpenAiCompatClient {
             provider_type,
             client,
             temperature_unsupported: AtomicBool::new(false),
+            request_extra,
+            request_extra_identity,
             send_reasoning_content,
         })
     }
@@ -274,6 +313,7 @@ impl OpenAiCompatClient {
         if self.temperature_unsupported.load(Ordering::Relaxed) {
             openai_req.temperature = None;
         }
+        openai_req.request_extra.clone_from(&self.request_extra);
         Ok(openai_req)
     }
 
@@ -554,6 +594,7 @@ fn translate_ai_request(
         max_tokens: max_tokens_field,
         max_completion_tokens: max_completion_tokens_field,
         response_format,
+        request_extra: BTreeMap::new(),
     })
 }
 
@@ -675,6 +716,7 @@ impl AiProvider for OpenAiCompatClient {
                 ("max_tokens", Some(max_tokens.as_str())),
                 ("base_url", Some(self.base_url.as_str())),
                 ("provider_type", Some(provider_type)),
+                ("request_extra", self.request_extra_identity.as_deref()),
                 ("reasoning_content", Some("v1")),
                 (
                     "send_reasoning_content",
@@ -1648,6 +1690,13 @@ mod tests {
         .unwrap()
     }
 
+    fn request_extra(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone()))
+            .collect()
+    }
+
     #[test]
     fn cache_identity_tracks_max_tokens_and_base_url() {
         let capped = test_client("https://api.openai.com/v1", 4096);
@@ -1665,6 +1714,102 @@ mod tests {
             client.cache_identity(),
             "gpt-5.1|max_tokens=4096|base_url=https://api.openai.com/v1/chat/completions|provider_type=openai|reasoning_content=v1|send_reasoning_content=false"
         );
+    }
+
+    #[test]
+    fn cache_identity_tracks_request_extra() {
+        let client = |extra: &[(&str, Value)]| {
+            compat_client(OpenAiCompatSettings {
+                request_extra: request_extra(extra),
+                ..Default::default()
+            })
+            .unwrap()
+        };
+
+        let plain = client(&[]);
+        let effort = client(&[("reasoning_effort", json!("high"))]);
+        let kwargs = client(&[("chat_template_kwargs", json!({"enable_thinking": false}))]);
+
+        assert_ne!(plain.cache_identity(), effort.cache_identity());
+        assert_ne!(effort.cache_identity(), kwargs.cache_identity());
+        assert!(effort.cache_identity().contains("reasoning_effort"));
+
+        let first = client(&[
+            (
+                "a",
+                serde_json::from_str(r#"{"x":1,"y":{"a":2,"b":3}}"#).unwrap(),
+            ),
+            ("b", json!(2)),
+        ]);
+        let second = client(&[
+            ("b", json!(2)),
+            (
+                "a",
+                serde_json::from_str(r#"{"y":{"b":3,"a":2},"x":1}"#).unwrap(),
+            ),
+        ]);
+        assert_eq!(first.cache_identity(), second.cache_identity());
+    }
+
+    #[test]
+    fn request_extra_serializes() -> Result<()> {
+        let client = compat_client(OpenAiCompatSettings {
+            max_tokens: Some(8192),
+            request_extra: request_extra(&[
+                ("reasoning_effort", json!("high")),
+                (
+                    "chat_template_kwargs",
+                    json!({"enable_thinking": true, "preserve_thinking": true}),
+                ),
+            ]),
+            ..Default::default()
+        })?;
+        let request = AiRequest {
+            system: None,
+            messages: vec![AiMessage {
+                role: AiRole::User,
+                content: Some("Review this.".to_string()),
+                thought: None,
+                thought_signature: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            tools: None,
+            temperature: None,
+            response_format: None,
+            context_tag: None,
+        };
+
+        let body = serde_json::to_value(client.prepare_request(request)?)?;
+
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(body["chat_template_kwargs"]["preserve_thinking"], true);
+        assert_eq!(body["max_tokens"], 8192);
+        assert_eq!(body["messages"][0]["role"], "user");
+
+        Ok(())
+    }
+
+    #[test]
+    fn request_extra_rejects_reserved_keys() {
+        let configure = |field: &str| {
+            compat_client(OpenAiCompatSettings {
+                request_extra: request_extra(&[(field, json!("something"))]),
+                ..Default::default()
+            })
+        };
+
+        for field in RESERVED_EXTRA_FIELDS {
+            let error = configure(field)
+                .err()
+                .unwrap_or_else(|| panic!("{field} must be refused"))
+                .to_string();
+            assert!(error.contains(field), "{error}");
+            assert!(error.contains("ai.openai_compat.request_extra"), "{error}");
+        }
+
+        assert!(configure("tool_choice").is_ok());
     }
 
     fn compat_client(settings: OpenAiCompatSettings) -> Result<OpenAiCompatClient> {
@@ -1848,6 +1993,7 @@ mod tests {
                 base_url: Some(base_url),
                 context_window_size: Some(8192),
                 max_tokens: Some(128),
+                request_extra: request_extra(&[("reasoning_effort", json!("high"))]),
                 ..Default::default()
             },
         )?;
@@ -1867,6 +2013,9 @@ mod tests {
         assert_eq!(bodies[0]["temperature"], 0.0);
         assert!(bodies[1].get("temperature").is_none());
         assert!(bodies[2].get("temperature").is_none());
+        for body in bodies.iter() {
+            assert_eq!(body["reasoning_effort"], "high");
+        }
         server.abort();
         Ok(())
     }

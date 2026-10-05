@@ -12,6 +12,8 @@ explicit_prompt_caching = false
 # base_url = "http://localhost:8080/v1"
 # context_window_size = 131072
 # max_tokens = 8192
+# Endpoint-specific request fields:
+# request_extra = { reasoning_effort = "high" }
 # Default false; enable only if the endpoint accepts reasoning_content.
 # send_reasoning_content = true
 

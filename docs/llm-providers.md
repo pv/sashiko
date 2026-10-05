@@ -484,17 +484,28 @@ compatible endpoint), use `docs/examples/Settings.openai-api.toml`:
 set `provider = "openai"`, `model = "gpt-5.6-sol"`, and export
 `OPENAI_API_KEY`.
 
-### Reasoning content
+### Reasoning controls
 
-Both `openai` and `openai-compatible` always preserve received
-`reasoning_content` as `thought`. Echoing that text unchanged on assistant
-turns is opt-in and defaults to `false` in both modes. Enable it only if the
-endpoint accepts `reasoning_content`:
+For both `openai` and `openai-compatible`, `request_extra` merges
+endpoint-specific fields into the request body. Use keys and values documented
+by your endpoint, for example:
 
 ```toml
 [ai.openai_compat]
-send_reasoning_content = true
+request_extra = { reasoning_effort = "high" }
+# Default false; enable only if the endpoint accepts reasoning_content.
+# send_reasoning_content = true
 ```
+
+Nested controls can use `request_extra = { chat_template_kwargs = { enable_thinking = true } }`.
+Reserved core fields and `stream` are rejected; see the
+[configuration reference](configuration.md#aiopenai_compat).
+
+Only `reasoning_content` is supported for received reasoning; it is always
+preserved as `thought`, even when echo is disabled.
+`send_reasoning_content` defaults to `false` in both modes for
+backward compatibility; enabling it echoes that text unchanged on assistant
+turns. Request extras and the echo setting partition the response cache.
 
 Some compatible gateways reject the `temperature` field for reasoning
 models. Sashiko retries an explicit unsupported-temperature error without
