@@ -7,6 +7,14 @@ temperature = 1.0
 [ai.gemini]
 explicit_prompt_caching = false
 
+# For a compatible endpoint, set provider = "openai-compatible" above.
+# [ai.openai_compat]
+# base_url = "http://localhost:8080/v1"
+# context_window_size = 131072
+# max_tokens = 8192
+# Default false; enable only if the endpoint accepts reasoning_content.
+# send_reasoning_content = true
+
 [review]
 # Reviews run concurrently up to this many patches. Sized for one developer's
 # machine; the daemon's own Settings.toml uses a much larger fan-out.

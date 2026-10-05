@@ -14,7 +14,7 @@ The official OpenAI API uses `max_completion_tokens` in the request body (introd
 | Provider names | `"openai"` (official API, uses `max_completion_tokens`) and `"openai-compatible"` (third-party, uses `max_tokens`) |
 | Token limit field | `"openai"` serializes `max_completion_tokens`; `"openai-compatible"` serializes `max_tokens`. Controlled by `OpenAiProviderType` enum on the client. |
 | Stdio support | Not needed for OpenAI-compatible provider |
-| Thinking/reasoning support | Not included in initial implementation (`thought: None` always) |
+| Thinking/reasoning support | Received `reasoning_content` is always preserved as `thought`. Echo on assistant turns is opt-in via `send_reasoning_content`, default `false` in both modes for backward compatibility. |
 | Temperature | Always passed through from `AiRequest` when present |
 | URL configuration | `base_url` from settings → model-based default (glm-*, moonshot-*, abab7-*, MiniMax-*, others) |
 | API key | `OPENAI_API_KEY` env only (fallback to `LLM_API_KEY`), no provider-specific keys |
@@ -79,7 +79,7 @@ pub struct OpenAiCompatClient {
 | Struct | Key Fields |
 |---|---|
 | `OpenAiRequest` | `model`, `messages`, `tools?`, `temperature?`, `max_tokens?`, `max_completion_tokens?`, `response_format?` |
-| `OpenAiMessage` | `role`, `content?`, `tool_calls?`, `tool_call_id?` |
+| `OpenAiMessage` | `role`, `content?`, `tool_calls?`, `tool_call_id?`, `reasoning_content?` |
 | `OpenAiToolCall` | `id`, `type` ("function"), `function: OpenAiToolCallFunction` |
 | `OpenAiToolCallFunction` | `name`, `arguments` (JSON **string**, not object) |
 | `OpenAiTool` | `type` ("function"), `function: OpenAiFunction` |
@@ -128,9 +128,9 @@ pub enum OpenAiCompatError {
 
 | Method | Purpose |
 |---|---|
-| `new(base_url, provider_type, model, context_window_size, max_tokens) -> Self` | Build `reqwest::Client` with `Authorization: Bearer {key}` header (from `OPENAI_API_KEY` → `LLM_API_KEY` env), 120s timeout |
+| `new(provider_type, model, api_timeout_secs, OpenAiCompatSettings) -> Result<Self>` | Build the authenticated client with the configured timeout. |
 | `post_request(&self, body: &Value) -> Result<OpenAiResponse, OpenAiCompatError>` | POST JSON `body` to `self.base_url`. Transport error → `TransientError(30s)` (error string sanitized via `redact_secret()`). On HTTP success, reads body as text and parses JSON; parse failure → `ApiError`. HTTP errors: 429 → `RateLimitExceeded` (`Retry-After` header parsed first; body regex `"Please retry in ([0-9.]+)s"` overrides if matched; default 60s), 401/403 → `AuthenticationError`, 500/502/503/504 → `TransientError(30s)`, other → `ApiError`. Includes logging of response tokens on success. |
-| `translate_ai_request(AiRequest, max_tokens, provider_type) -> OpenAiRequest` | See translation mapping below |
+| `translate_ai_request(AiRequest, max_tokens, provider_type, send_reasoning_content) -> OpenAiRequest` | See translation mapping below |
 | `translate_ai_response(OpenAiResponse) -> AiResponse` | See translation mapping below |
 | `estimate_tokens_generic(AiRequest) -> usize` | Reuse `TokenBudget::estimate_tokens`. Must include `request.system` along with messages and tools. |
 
@@ -148,7 +148,7 @@ pub enum OpenAiCompatError {
 | `system: Some(text)` | Message: `{ role: "system", content: text }` |
 | `AiRole::System` message | `{ role: "system", content }` |
 | `AiRole::User` message | `{ role: "user", content }` |
-| `AiRole::Assistant` message | `{ role: "assistant", content?, tool_calls? }` — tool_calls with `arguments` serialized as JSON **string** |
+| `AiRole::Assistant` message | `{ role: "assistant", content?, tool_calls?, reasoning_content? }` — tool-call `arguments` is a JSON **string**; `thought` is echoed unchanged only when `send_reasoning_content = true` and the endpoint accepts it. |
 | `AiRole::Tool` message | `{ role: "tool", tool_call_id, content }` |
 | `tools` | `[{ type: "function", function: { name, description, parameters } }]` |
 | `temperature` | Passed through directly when present |
@@ -162,7 +162,7 @@ pub enum OpenAiCompatError {
 | `OpenAiResponse` | `AiResponse` |
 |---|---|
 | `choices[0].message.content` | `content` |
-| (no reasoning support) | `thought: None` |
+| `choices[0].message.reasoning_content` | `thought`, regardless of the echo setting |
 | `choices[0].message.tool_calls` | `tool_calls` — `function.arguments` (JSON string) parsed to `serde_json::Value`, `thought_signature: None` |
 | `usage.prompt_tokens` | `prompt_tokens` |
 | `usage.completion_tokens` | `completion_tokens` |
@@ -175,8 +175,7 @@ pub enum OpenAiCompatError {
 async fn generate_content(&self, request: AiRequest) -> Result<AiResponse> {
     tracing::info!("Sending OpenAI request...");
 
-    let mut openai_req = translate_ai_request(request, self.max_tokens, self.provider_type)?;
-    openai_req.model = self.model.clone();
+    let openai_req = self.prepare_request(request)?;
 
     let resp_body = serde_json::to_value(&openai_req)?;
     let resp = self.post_request(&resp_body).await?;
@@ -237,17 +236,13 @@ fn get_capabilities(&self) -> ProviderCapabilities {
 
 ### `src/settings.rs`
 
-```rust
-#[derive(Debug, Deserialize, Clone)]
-pub struct OpenAiCompatSettings {
-    #[serde(default)]
-    pub base_url: Option<String>,
-    #[serde(default)]
-    pub context_window_size: Option<usize>,
-    #[serde(default)]
-    pub max_tokens: Option<u32>,
-}
-```
+`OpenAiCompatSettings` configures both provider modes:
+
+| Field | Default |
+|---|---|
+| `base_url`, `context_window_size` | Model-derived |
+| `max_tokens` | `4096` |
+| `send_reasoning_content` | `false`; enabled and disabled modes partition the response cache |
 
 Field in `AiSettings`:
 
@@ -265,39 +260,8 @@ pub mod openai;
 
 #### Factory: Combined Match Arm in `create_provider()`
 
-Both arms share the same config-reading logic, differing only in `provider_type`:
-
-```rust
-"openai" | "openai-compatible" => {
-    let provider_type = match settings.ai.provider.to_lowercase().as_str() {
-        "openai" => openai::OpenAiProviderType::OpenAi,
-        _ => openai::OpenAiProviderType::OpenAiCompatible,
-    };
-
-    let base_url = settings.ai.openai_compat
-        .as_ref()
-        .and_then(|c| c.base_url.clone())
-        .unwrap_or_else(|| openai::OpenAiCompatClient::default_base_url_for_model(&settings.ai.model));
-
-    let context_window = settings.ai.openai_compat
-        .as_ref()
-        .and_then(|c| c.context_window_size)
-        .unwrap_or_else(|| openai::OpenAiCompatClient::default_context_window_for_model(&settings.ai.model));
-
-    let max_tokens = settings.ai.openai_compat
-        .as_ref()
-        .and_then(|c| c.max_tokens)
-        .unwrap_or(4096);
-
-    Ok(Arc::new(openai::OpenAiCompatClient::new(
-        base_url,
-        provider_type,
-        settings.ai.model.clone(),
-        context_window,
-        max_tokens,
-    )))
-}
-```
+Both arms pass `OpenAiCompatSettings` to the shared constructor, differing only
+in `provider_type`.
 
 **Note:** Factory does not manipulate environment variables. Constructor reads `OPENAI_API_KEY` → `LLM_API_KEY` internally.
 

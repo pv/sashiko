@@ -527,35 +527,11 @@ pub fn create_provider_from_ai(ai: &AiSettings) -> Result<Arc<dyn AiProvider>> {
                 _ => openai::OpenAiProviderType::OpenAiCompatible,
             };
 
-            let base_url = ai
-                .openai_compat
-                .as_ref()
-                .and_then(|c| c.base_url.clone())
-                .unwrap_or_else(|| {
-                    openai::OpenAiCompatClient::default_base_url_for_model(&ai.model)
-                });
-
-            let context_window = ai
-                .openai_compat
-                .as_ref()
-                .and_then(|c| c.context_window_size)
-                .unwrap_or_else(|| {
-                    openai::OpenAiCompatClient::default_context_window_for_model(&ai.model)
-                });
-
-            let max_tokens = ai
-                .openai_compat
-                .as_ref()
-                .and_then(|c| c.max_tokens)
-                .unwrap_or(4096);
-
             let provider = openai::OpenAiCompatClient::new(
-                base_url,
                 provider_type,
                 ai.model.clone(),
-                context_window,
-                max_tokens,
                 ai.api_timeout_secs,
+                ai.openai_compat.clone().unwrap_or_default(),
             )?;
 
             Ok(Arc::new(provider))

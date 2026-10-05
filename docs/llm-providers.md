@@ -484,6 +484,18 @@ compatible endpoint), use `docs/examples/Settings.openai-api.toml`:
 set `provider = "openai"`, `model = "gpt-5.6-sol"`, and export
 `OPENAI_API_KEY`.
 
+### Reasoning content
+
+Both `openai` and `openai-compatible` always preserve received
+`reasoning_content` as `thought`. Echoing that text unchanged on assistant
+turns is opt-in and defaults to `false` in both modes. Enable it only if the
+endpoint accepts `reasoning_content`:
+
+```toml
+[ai.openai_compat]
+send_reasoning_content = true
+```
+
 Some compatible gateways reject the `temperature` field for reasoning
 models. Sashiko retries an explicit unsupported-temperature error without
 the field and omits it on later requests to the same endpoint.

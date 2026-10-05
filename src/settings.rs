@@ -342,7 +342,7 @@ fn default_vertex_max_tokens() -> u32 {
     8192
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
 #[allow(unused)]
 pub struct OpenAiCompatSettings {
@@ -352,6 +352,8 @@ pub struct OpenAiCompatSettings {
     pub context_window_size: Option<usize>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub send_reasoning_content: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -1153,6 +1155,19 @@ mod tests {
             Settings::local_review_path_in(temp.path()),
             temp.path().join("Settings.toml")
         );
+    }
+
+    #[test]
+    fn test_reasoning_content_defaults_and_override() {
+        let compat: OpenAiCompatSettings =
+            toml::from_str("base_url = 'http://localhost/v1'").unwrap();
+        assert!(!compat.send_reasoning_content);
+
+        for enabled in [false, true] {
+            let compat: OpenAiCompatSettings =
+                toml::from_str(&format!("send_reasoning_content = {enabled}")).unwrap();
+            assert_eq!(compat.send_reasoning_content, enabled);
+        }
     }
 
     #[test]

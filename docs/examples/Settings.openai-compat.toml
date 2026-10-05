@@ -7,3 +7,5 @@ model = "gemma-xyz"
 base_url = "http://localhost:8080/v1"
 context_window_size = 8192
 max_tokens = 2048
+# Default false; enable only if the endpoint accepts reasoning_content.
+# send_reasoning_content = true
