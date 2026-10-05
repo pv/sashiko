@@ -501,7 +501,7 @@ Nested controls can use `request_extra = { chat_template_kwargs = { enable_think
 Reserved core fields and `stream` are rejected; see the
 [configuration reference](configuration.md#aiopenai_compat).
 
-Only `reasoning_content` is supported for received reasoning; it is always
+Received `reasoning_content` (alias `reasoning`) is always
 preserved as `thought`, even when echo is disabled.
 `send_reasoning_content` defaults to `false` in both modes for
 backward compatibility; enabling it echoes that text unchanged on assistant

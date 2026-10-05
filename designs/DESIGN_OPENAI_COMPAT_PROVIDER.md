@@ -6,6 +6,13 @@ Sashiko currently supports two AI providers with custom API formats: Gemini (`sr
 
 The official OpenAI API uses `max_completion_tokens` in the request body (introduced with the `o1` model family), while third-party OpenAI-compatible providers use the legacy `max_tokens` field. To support both, we expose two provider names — `"openai"` and `"openai-compatible"` — backed by the same client with a serialization flag.
 
+Preserving reasoning across tool calls lets a model continue its reasoning
+after receiving tool results. OpenRouter's
+[preserving reasoning guide](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#preserving-reasoning-blocks)
+documents this use case and treats plaintext `reasoning` and
+`reasoning_content` as equivalent. This client preserves those strings;
+structured `reasoning_details` blocks are outside this feature's scope.
+
 ## Design Decisions
 
 | Decision | Choice |
@@ -14,7 +21,7 @@ The official OpenAI API uses `max_completion_tokens` in the request body (introd
 | Provider names | `"openai"` (official API, uses `max_completion_tokens`) and `"openai-compatible"` (third-party, uses `max_tokens`) |
 | Token limit field | `"openai"` serializes `max_completion_tokens`; `"openai-compatible"` serializes `max_tokens`. Controlled by `OpenAiProviderType` enum on the client. |
 | Stdio support | Not needed for OpenAI-compatible provider |
-| Thinking/reasoning support | Received `reasoning_content` is always preserved as `thought`. Echo on assistant turns is opt-in via `send_reasoning_content`, default `false` in both modes for backward compatibility. |
+| Thinking/reasoning support | Received `reasoning_content` (alias `reasoning`) is always preserved as `thought`. Echo as `reasoning_content` on assistant turns is opt-in via `send_reasoning_content`, default `false` in both modes for backward compatibility. |
 | Temperature | Always passed through from `AiRequest` when present |
 | URL configuration | `base_url` from settings → model-based default (glm-*, moonshot-*, abab7-*, MiniMax-*, others) |
 | API key | `OPENAI_API_KEY` env only (fallback to `LLM_API_KEY`), no provider-specific keys |

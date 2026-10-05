@@ -80,7 +80,7 @@ pub struct OpenAiMessage {
     pub tool_calls: Option<Vec<OpenAiToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "reasoning", skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 }
 
@@ -1270,6 +1270,25 @@ mod tests {
             let response = translate_ai_response(resp)?;
             assert_eq!(response.thought.as_deref(), thought);
             assert_eq!(response.content.as_deref(), Some("Answer"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reasoning_alias_serializes_as_reasoning_content() -> Result<()> {
+        for thought in [json!("  Thought\n"), json!(""), Value::Null] {
+            let message: OpenAiMessage = serde_json::from_value(json!({
+                "role": "assistant",
+                "reasoning": thought,
+            }))?;
+            assert_eq!(message.reasoning_content.as_deref(), thought.as_str());
+            let serialized = serde_json::to_value(&message)?;
+            assert!(serialized.get("reasoning").is_none());
+            if thought.is_null() {
+                assert!(serialized.get("reasoning_content").is_none());
+            } else {
+                assert_eq!(serialized["reasoning_content"], thought);
+            }
         }
         Ok(())
     }
